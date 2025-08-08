@@ -207,3 +207,104 @@
     )
   )
 )
+
+;; Initiate withdrawal process with mandatory cooling period
+(define-public (request-withdrawal (amount uint))
+  (let (
+      (user-stake (unwrap! (map-get? StakingRecords tx-sender) ERR-NO-STAKE))
+      (staked-balance (get staked-amount user-stake))
+    )
+    ;; Validate withdrawal eligibility
+    (asserts! (>= staked-balance amount) ERR-INSUFFICIENT-STX)
+    (asserts! (is-none (get withdrawal-initiated user-stake)) ERR-COOLDOWN-ACTIVE)
+
+    ;; Initialize withdrawal cooldown period
+    (map-set StakingRecords tx-sender
+      (merge user-stake { withdrawal-initiated: (some stacks-block-height) })
+    )
+    (ok true)
+  )
+)
+
+;; Complete withdrawal after cooldown period expires
+(define-public (execute-withdrawal)
+  (let (
+      (user-stake (unwrap! (map-get? StakingRecords tx-sender) ERR-NO-STAKE))
+      (withdrawal-block (unwrap! (get withdrawal-initiated user-stake) ERR-NOT-AUTHORIZED))
+    )
+    ;; Verify cooldown period has elapsed
+    (asserts!
+      (>= (- stacks-block-height withdrawal-block) (var-get withdrawal-delay))
+      ERR-COOLDOWN-ACTIVE
+    )
+
+    ;; Transfer STX back to user
+    (try! (as-contract (stx-transfer? (get staked-amount user-stake) tx-sender tx-sender)))
+
+    ;; Remove staking record
+    (map-delete StakingRecords tx-sender)
+
+    ;; Update protocol's total locked value
+    (var-set total-stx-locked
+      (- (var-get total-stx-locked) (get staked-amount user-stake))
+    )
+    (ok true)
+  )
+)
+
+;; GOVERNANCE SYSTEM
+
+;; Create new governance proposal for community voting
+(define-public (submit-proposal
+    (title (string-utf8 256))
+    (voting-duration uint)
+  )
+  (let (
+      (user-portfolio (unwrap! (map-get? UserPortfolios tx-sender) ERR-NOT-AUTHORIZED))
+      (new-proposal-id (+ (var-get governance-proposals) u1))
+    )
+    ;; Validate proposal requirements
+    (asserts! (>= (get governance-weight user-portfolio) u1000000)
+      ERR-NOT-AUTHORIZED
+    )
+    (asserts! (is-valid-proposal-title title) ERR-INVALID-PROTOCOL)
+    (asserts! (is-valid-voting-duration voting-duration) ERR-INVALID-PROTOCOL)
+
+    ;; Register new governance proposal
+    (map-set GovernanceProposals { proposal-id: new-proposal-id } {
+      proposer: tx-sender,
+      title: title,
+      created-block: stacks-block-height,
+      voting-ends: (+ stacks-block-height voting-duration),
+      is-executed: false,
+      support-votes: u0,
+      opposition-votes: u0,
+      quorum-required: u2000000,
+    })
+
+    ;; Increment proposal counter
+    (var-set governance-proposals new-proposal-id)
+    (ok new-proposal-id)
+  )
+)
+
+;; Submit vote on active governance proposal
+(define-public (cast-vote
+    (proposal-id uint)
+    (support-proposal bool)
+  )
+  (let (
+      (proposal-data (unwrap! (map-get? GovernanceProposals { proposal-id: proposal-id })
+        ERR-INVALID-PROTOCOL
+      ))
+      (user-portfolio (unwrap! (map-get? UserPortfolios tx-sender) ERR-NOT-AUTHORIZED))
+      (user-voting-power (get governance-weight user-portfolio))
+      (total-proposals (var-get governance-proposals))
+    )
+    ;; Validate voting requirements
+    (asserts! (< stacks-block-height (get voting-ends proposal-data))
+      ERR-NOT-AUTHORIZED
+    )
+    (asserts! (and (> proposal-id u0) (<= proposal-id total-proposals))
+      ERR-INVALID-PROTOCOL
+    )
