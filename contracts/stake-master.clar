@@ -104,3 +104,106 @@
     total-rewards: uint,
   }
 )
+
+;; Membership Tier Configuration
+(define-map MembershipTiers
+  uint
+  {
+    required-stake: uint,
+    yield-multiplier: uint,
+    tier-benefits: (list 10 bool),
+  }
+)
+
+;; PROTOCOL INITIALIZATION
+
+;; Initialize protocol with membership tier structure
+(define-public (initialize-protocol)
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+
+    ;; Bronze Tier - Entry Level (1M STX minimum)
+    (map-set MembershipTiers u1 {
+      required-stake: u1000000,
+      yield-multiplier: u100,
+      tier-benefits: (list true false false false false false false false false false),
+    })
+
+    ;; Gold Tier - Advanced Level (5M STX minimum)
+    (map-set MembershipTiers u2 {
+      required-stake: u5000000,
+      yield-multiplier: u175,
+      tier-benefits: (list true true true true false false false false false false),
+    })
+
+    ;; Diamond Tier - Elite Level (10M STX minimum)
+    (map-set MembershipTiers u3 {
+      required-stake: u10000000,
+      yield-multiplier: u250,
+      tier-benefits: (list true true true true true true true false false false),
+    })
+
+    (ok true)
+  )
+)
+
+;; CORE STAKING FUNCTIONALITY
+
+;; Deposit STX with optional time-lock for enhanced rewards
+(define-public (deposit-stx
+    (amount uint)
+    (lock-duration uint)
+  )
+  (let ((existing-portfolio (default-to {
+      total-staked: u0,
+      locked-amount: u0,
+      health-score: u100,
+      last-interaction: u0,
+      stx-deposited: u0,
+      reward-tokens: u0,
+      governance-weight: u0,
+      membership-tier: u0,
+      yield-multiplier: u100,
+    }
+      (map-get? UserPortfolios tx-sender)
+    )))
+    ;; Input validation and protocol status checks
+    (asserts! (is-valid-lock-duration lock-duration) ERR-INVALID-PROTOCOL)
+    (asserts! (var-get protocol-active) ERR-PAUSED)
+    (asserts! (>= amount (var-get minimum-entry-stake)) ERR-BELOW-MINIMUM)
+
+    ;; Execute STX transfer to protocol vault
+    (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
+
+    ;; Calculate new tier status and multipliers
+    (let (
+        (updated-stake (+ (get stx-deposited existing-portfolio) amount))
+        (tier-data (calculate-tier-status updated-stake))
+        (time-lock-bonus (get-lock-bonus lock-duration))
+      )
+      ;; Create new staking record
+      (map-set StakingRecords tx-sender {
+        staked-amount: amount,
+        entry-block: stacks-block-height,
+        last-reward-claim: stacks-block-height,
+        lock-duration: lock-duration,
+        withdrawal-initiated: none,
+        total-rewards: u0,
+      })
+
+      ;; Update user portfolio with new tier benefits
+      (map-set UserPortfolios tx-sender
+        (merge existing-portfolio {
+          stx-deposited: updated-stake,
+          membership-tier: (get tier-level tier-data),
+          yield-multiplier: (* (get base-multiplier tier-data) time-lock-bonus),
+          last-interaction: stacks-block-height,
+        })
+      )
+
+      ;; Update protocol's total locked value
+      (var-set total-stx-locked (+ (var-get total-stx-locked) amount))
+      (ok true)
+    )
+  )
+)
