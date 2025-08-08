@@ -409,3 +409,69 @@
         tier-level: u2,
         base-multiplier: u175,
       } ;; Gold Tier
+      {
+        tier-level: u1,
+        base-multiplier: u100,
+      } ;; Bronze Tier
+    )
+  )
+)
+
+;; Calculate time-lock reward bonus
+(define-private (get-lock-bonus (duration uint))
+  (if (>= duration u8640) ;; 60-day lock
+    u175 ;; 1.75x bonus
+    (if (>= duration u4320) ;; 30-day lock
+      u140 ;; 1.4x bonus
+      (if (>= duration u1440) ;; 7-day lock
+        u115 ;; 1.15x bonus
+        u100 ;; No lock bonus
+      )
+    )
+  )
+)
+
+;; Calculate user rewards based on staking parameters
+(define-private (compute-user-rewards
+    (user principal)
+    (block-duration uint)
+  )
+  (let (
+      (stake-record (unwrap! (map-get? StakingRecords user) u0))
+      (user-portfolio (unwrap! (map-get? UserPortfolios user) u0))
+      (principal-amount (get staked-amount stake-record))
+      (yield-rate (var-get base-yield-rate))
+      (user-multiplier (get yield-multiplier user-portfolio))
+    )
+    ;; Reward Formula: (principal * rate * multiplier * duration) / normalization
+    (/ (* (* (* principal-amount yield-rate) user-multiplier) block-duration)
+      u15000000
+    )
+  )
+)
+
+;; Validate governance proposal title format
+(define-private (is-valid-proposal-title (title (string-utf8 256)))
+  (and
+    (>= (len title) u15) ;; Minimum 15 characters
+    (<= (len title) u256) ;; Maximum 256 characters
+  )
+)
+
+;; Validate lock duration options
+(define-private (is-valid-lock-duration (duration uint))
+  (or
+    (is-eq duration u0) ;; No time lock
+    (is-eq duration u1440) ;; 7-day lock
+    (is-eq duration u4320) ;; 30-day lock
+    (is-eq duration u8640) ;; 60-day lock
+  )
+)
+
+;; Validate voting period parameters
+(define-private (is-valid-voting-duration (duration uint))
+  (and
+    (>= duration u144) ;; Minimum 24 hours
+    (<= duration u4320) ;; Maximum 30 days
+  )
+)
