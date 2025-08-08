@@ -308,3 +308,104 @@
     (asserts! (and (> proposal-id u0) (<= proposal-id total-proposals))
       ERR-INVALID-PROTOCOL
     )
+    (asserts! (> user-voting-power u0) ERR-NOT-AUTHORIZED)
+
+    ;; Record weighted vote
+    (map-set GovernanceProposals { proposal-id: proposal-id }
+      (merge proposal-data {
+        support-votes: (if support-proposal
+          (+ (get support-votes proposal-data) user-voting-power)
+          (get support-votes proposal-data)
+        ),
+        opposition-votes: (if support-proposal
+          (get opposition-votes proposal-data)
+          (+ (get opposition-votes proposal-data) user-voting-power)
+        ),
+      })
+    )
+    (ok true)
+  )
+)
+
+;; ADMINISTRATIVE FUNCTIONS
+
+;; Emergency protocol halt for security purposes
+(define-public (emergency-halt)
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    (var-set protocol-active false)
+    (var-set emergency-shutdown true)
+    (ok true)
+  )
+)
+
+;; Restore normal protocol operations
+(define-public (restore-operations)
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    (var-set protocol-active true)
+    (var-set emergency-shutdown false)
+    (ok true)
+  )
+)
+
+;; Update base yield rate (governance controlled)
+(define-public (update-yield-rate (new-rate uint))
+  (begin
+    (asserts! (is-eq tx-sender CONTRACT-OWNER) ERR-NOT-AUTHORIZED)
+    (asserts! (and (>= new-rate u100) (<= new-rate u2000)) ERR-INVALID-AMOUNT)
+    (var-set base-yield-rate new-rate)
+    (ok true)
+  )
+)
+
+;; READ-ONLY QUERY FUNCTIONS
+
+;; Retrieve protocol owner address
+(define-read-only (get-protocol-owner)
+  (ok CONTRACT-OWNER)
+)
+
+;; Query total STX locked in protocol
+(define-read-only (get-total-locked-stx)
+  (ok (var-get total-stx-locked))
+)
+
+;; Get current governance proposal count
+(define-read-only (get-proposal-count)
+  (ok (var-get governance-proposals))
+)
+
+;; Check protocol operational status
+(define-read-only (get-protocol-status)
+  (ok {
+    active: (var-get protocol-active),
+    emergency: (var-get emergency-shutdown),
+    base-rate: (var-get base-yield-rate),
+  })
+)
+
+;; Get user's complete portfolio information
+(define-read-only (get-user-portfolio (user principal))
+  (map-get? UserPortfolios user)
+)
+
+;; Retrieve specific governance proposal details
+(define-read-only (get-proposal-details (proposal-id uint))
+  (map-get? GovernanceProposals { proposal-id: proposal-id })
+)
+
+;; INTERNAL HELPER FUNCTIONS
+
+;; Determine membership tier based on total stake
+(define-private (calculate-tier-status (stake-total uint))
+  (if (>= stake-total u10000000)
+    {
+      tier-level: u3,
+      base-multiplier: u250,
+    } ;; Diamond Tier
+    (if (>= stake-total u5000000)
+      {
+        tier-level: u2,
+        base-multiplier: u175,
+      } ;; Gold Tier
